@@ -10,6 +10,7 @@ import type {
   Scenario,
 } from '@checkout/contracts';
 import { newKey, request } from '../api';
+import { endpoints } from '../api/endpoints';
 import type { CheckoutOptions, FormState, Sandbox, Session, Stage } from '../types/checkout';
 import { errorText } from '../utils/errors';
 import { storage } from '../utils/storage';
@@ -50,14 +51,14 @@ export function useCheckout() {
 
   const refreshCart = async (activeToken = token) => {
     if (!activeToken) return;
-    setCart(await request<Cart>('/api/cart', activeToken));
+    setCart(await request<Cart>(endpoints.cart, activeToken));
   };
 
   useEffect(() => {
     let active = true;
     const restore = async () => {
       try {
-        const catalog = await request<Product[]>('/api/products', null);
+        const catalog = await request<Product[]>(endpoints.products, null);
         const storedToken = token;
         let session: Session;
         if (storedToken) {
@@ -65,13 +66,16 @@ export function useCheckout() {
             session = {
               id: storage.get('sessionId') ?? '',
               token: storedToken,
-              cart: await request<Cart>('/api/cart', storedToken),
+              cart: await request<Cart>(endpoints.cart, storedToken),
             };
           } catch {
-            session = await request<Session>('/api/sessions', null, { method: 'POST', body: {} });
+            session = await request<Session>(endpoints.sessions, null, {
+              method: 'POST',
+              body: {},
+            });
           }
         } else {
-          session = await request<Session>('/api/sessions', null, { method: 'POST', body: {} });
+          session = await request<Session>(endpoints.sessions, null, { method: 'POST', body: {} });
         }
         if (!active) return;
         setProducts(catalog);
@@ -96,19 +100,19 @@ export function useCheckout() {
     const orderId = storage.get('orderId');
     if (!orderId) return;
     try {
-      const restoredOrder = await request<Order>(`/api/orders/${orderId}`, sessionToken);
+      const restoredOrder = await request<Order>(endpoints.order(orderId), sessionToken);
       setOrder(restoredOrder);
       setStage('success');
       if (restoredOrder.paymentMethod !== 'card') return;
       const paymentId = storage.get('paymentId');
       const restoredPayment = paymentId
-        ? await request<Payment>(`/api/payments/${paymentId}`, sessionToken).catch(() => null)
+        ? await request<Payment>(endpoints.payment(paymentId), sessionToken).catch(() => null)
         : null;
       if (restoredPayment) {
         setPayment(restoredPayment);
       } else {
         const payments = await request<Payment[]>(
-          `/api/orders/${restoredOrder.id}/payments`,
+          endpoints.orderPayments(restoredOrder.id),
           sessionToken,
         );
         const latestPayment = payments[0];
@@ -117,7 +121,7 @@ export function useCheckout() {
           storage.set('paymentId', latestPayment.id);
         }
       }
-      setSandbox(await request<Sandbox>('/api/sandbox', null));
+      setSandbox(await request<Sandbox>(endpoints.sandbox, null));
     } catch {
       storage.remove('orderId');
     }
@@ -129,13 +133,13 @@ export function useCheckout() {
     let stale = false;
     const poll = async () => {
       try {
-        const next = await request<Payment>(`/api/payments/${payment.id}`, token, {
+        const next = await request<Payment>(endpoints.payment(payment.id), token, {
           signal: controller.signal,
         });
         if (stale) return;
         setPayment(next);
         if (['succeeded', 'failed', 'cancelled'].includes(next.status)) {
-          const latest = await request<Order>(`/api/orders/${order.id}`, token, {
+          const latest = await request<Order>(endpoints.order(order.id), token, {
             signal: controller.signal,
           });
           if (!stale) setOrder(latest);
@@ -160,9 +164,9 @@ export function useCheckout() {
     setError('');
     try {
       if (quantity === 0) {
-        await request(`/api/cart/items/${productId}`, token, { method: 'DELETE' });
+        await request(endpoints.cartItem(productId), token, { method: 'DELETE' });
       } else {
-        await request(`/api/cart/items/${productId}`, token, {
+        await request(endpoints.cartItem(productId), token, {
           method: 'PUT',
           body: { quantity },
         });
@@ -181,8 +185,8 @@ export function useCheckout() {
     setError('');
     try {
       const [nextOptions, nextSandbox] = await Promise.all([
-        request<CheckoutOptions>('/api/checkout/options', token),
-        request<Sandbox>('/api/sandbox', null),
+        request<CheckoutOptions>(endpoints.checkoutOptions, token),
+        request<Sandbox>(endpoints.sandbox, null),
       ]);
       setOptions(nextOptions);
       setSandbox(nextSandbox);
@@ -218,7 +222,7 @@ export function useCheckout() {
     setError('');
     try {
       setQuote(
-        await request<Quote>('/api/quotes', token, {
+        await request<Quote>(endpoints.quotes, token, {
           method: 'POST',
           body: { cartVersion: cart.version, delivery },
         }),
@@ -250,7 +254,7 @@ export function useCheckout() {
       storage.set('orderKey', orderKey);
       storage.set('orderQuoteId', quote.id);
       storage.remove('paymentKey');
-      const next = await request<Order>('/api/orders', token, {
+      const next = await request<Order>(endpoints.orders, token, {
         method: 'POST',
         body: { quoteId: quote.id, customer, paymentMethod: form.paymentMethod },
         idempotencyKey: orderKey,
@@ -277,7 +281,7 @@ export function useCheckout() {
           ? (storage.get('paymentKey') ?? newKey())
           : newKey();
       storage.set('paymentKey', paymentKey);
-      const next = await request<Payment>(`/api/orders/${nextOrder.id}/payments`, token, {
+      const next = await request<Payment>(endpoints.orderPayments(nextOrder.id), token, {
         method: 'POST',
         body: {},
         idempotencyKey: paymentKey,
@@ -300,13 +304,13 @@ export function useCheckout() {
     setError('');
     try {
       const simulation = await request<{ status: Payment['status'] }>(
-        `/api/payments/${payment.id}/simulations`,
+        endpoints.paymentSimulations(payment.id),
         token,
         { method: 'POST', body: { scenario } },
       );
       setPayment((current) => (current ? { ...current, status: simulation.status } : current));
       if (['succeeded', 'failed', 'cancelled'].includes(simulation.status) && order) {
-        setOrder(await request<Order>(`/api/orders/${order.id}`, token));
+        setOrder(await request<Order>(endpoints.order(order.id), token));
       }
     } catch (cause) {
       setError(errorText(cause));
